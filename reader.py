@@ -19,6 +19,15 @@ def _read_words(filename):
     b = a.split("\n")
     return [word for sent in b[::2] for word in sent.split()], [word for sent in b[1::2] for word in sent.split()]
 
+def _read_words_predict(filename):
+
+  with open(filename, "r", encoding = "utf-8", errors = 'ignore') as f:
+    a = f.read()
+    a = a.replace("\n", " <eos> \n").replace("\t", " <eos> \n")
+    a = a.split("\n")
+    b = [sent.split() for sent in a[::2]]
+    c = [sent.split() for sent in a[1::2]]
+    return b,c
 
 def _build_vocab(filename):
   data, other = _read_words(filename)
@@ -32,9 +41,19 @@ def _build_vocab(filename):
   return word_to_id
 
 
+
 def _file_to_word_ids(filename, word_to_id):
   eng, no = _read_words(filename)
   return [word_to_id[word] if word in word_to_id else 9999 for word in eng], [word_to_id[word] if word in word_to_id else 9999 for word in no]
+def _file_to_word_ids_predict(filename, word_to_id):
+  eng, no = _read_words_predict(filename)
+  b = eng[:]
+  c = no
+  for i in range(len(eng)):
+    b[i] = [word_to_id[word] if word in word_to_id else 9999 for word in eng[i]]
+    c[i] = [word_to_id[word] if word in word_to_id else 9999 for word in no[i]]
+
+  return eng,b,c
 
 
 def ptb_raw_data(data_path=None):
@@ -51,30 +70,55 @@ def ptb_raw_data(data_path=None):
     where each of the data objects can be passed to PTBIterator.
   """
 
-  train_path = "ptb.train.txt"
+  train_path = "gay.txt"
 
   word_to_id = _build_vocab(train_path)
   correct_data, wrong_data = _file_to_word_ids(train_path, word_to_id)
+  # word_to_id = _build_vocab_single(train_path)
+  # correct_data = _file_to_word_ids_single(train_path, word_to_id)
   vocabulary = len(word_to_id)
   return correct_data, wrong_data, vocabulary
+  # return correct_data, word_to_id
+
+def predict_raw_data(data_path=None):
+  """Load PTB raw data from data directory "data_path".
+  Reads PTB text files, converts strings to integer ids,
+  and performs mini-batching of the inputs.
+  The PTB dataset comes from Tomas Mikolov's webpage:
+  http://www.fit.vutbr.cz/~imikolov/rnnlm/simple-examples.tgz
+  Args:
+    data_path: string path to the directory where simple-examples.tgz has
+      been extracted.
+  Returns:
+    tuple (train_data, valid_data, test_data, vocabulary)
+    where each of the data objects can be passed to PTBIterator.
+  """
+
+  train_path = "train.txt"
+
+  word_to_id = _build_vocab(train_path)
+  words, correct_data, wrong_data = _file_to_word_ids_predict(train_path, word_to_id)
+  # word_to_id = _build_vocab_single(train_path)
+  # correct_data = _file_to_word_ids_single(train_path, word_to_id)
+  return words, correct_data, wrong_data, word_to_id
+  # return correct_data, word_to_id
 
 def getinputoutput(raw_data, batch_size, num_steps):
   data = np.asarray(raw_data)
-  num_batches = data.shape[0] // (batch_size * num_steps)
+  num_batches = data.shape[0] // (batch_size)
 # makes sure the data ends with a full batch
-  data = data [:num_batches*batch_size*num_steps:]
-  data = np.reshape(data,(num_batches,batch_size,num_steps))
-  print(data.shape)
-  data = np.split(data, num_batches)
-  data = [np.squeeze(subarray) for subarray in data]
-  print(np.asarray(data).shape)
+  data = data [:num_batches*batch_size:]
+  data = np.reshape(data,(batch_size,num_batches))
+  num_epochs = (num_batches-1)//num_steps
   # x = input, y = targets
-  xdata = data
-  ydata = np.copy(data)
+  xdata = np.zeros(shape = (num_epochs,batch_size,num_steps))
+  ydata = np.zeros(shape = (num_epochs,batch_size,num_steps))
+
   # shift all the targets by one: we want to predict the NEXT word
-  for i in range(num_batches):
-    ydata[i][:,:-1] = xdata[i][:,1:]
-    ydata[i][:,-1] = 9999
+  for i in range(num_epochs):
+    xdata[i] = data[:,i*num_steps:i*num_steps+num_steps]
+    ydata[i] = data[:,i*num_steps+1:i*num_steps+num_steps+1]
+  xdata = xdata[:num_batches-1]
   return np.asarray(xdata), ydata
 
 # def ptb_producer(raw_data, batch_size, num_steps, name=None):

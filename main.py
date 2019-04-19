@@ -6,10 +6,11 @@ from __future__ import print_function
 import numpy as np
 import tensorflow as tf
 import time
+import inspect
 
 import reader
 import os
-
+import numpy as np
 
 
 def data_type():
@@ -22,7 +23,9 @@ class PTBInput(object):
   def __init__(self, config, data, name=None):
     self.batch_size = batch_size = config.batch_size
     self.num_steps = num_steps = config.num_steps
-    self.epoch_size = ((len(data) // batch_size) - 1) // num_steps
+
+    #self.epoch_size = len(data)
+    self.epoch_size = len(data)
 
 
 class PTBModel(object):
@@ -39,11 +42,20 @@ class PTBModel(object):
     # Slightly better results can be obtained with forget gate biases
     # initialized to 1 but the hyperparameters of the model would need to be
     # different than reported in the paper.
-    lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(size, forget_bias=0.0, state_is_tuple=True)
+    def lstm_cell():
+      if 'reuse' in inspect.getargspec(tf.contrib.rnn.BasicLSTMCell.__init__).args:
+        return tf.contrib.rnn.BasicLSTMCell(size, forget_bias=0.0, state_is_tuple=True,reuse=tf.get_variable_scope().reuse)
+      else:
+        return tf.contrib.rnn.BasicLSTMCell(size, forget_bias=0.0, state_is_tuple=True)
+
+
+    attn_cell = lstm_cell
     if is_training and config.keep_prob < 1:
-      lstm_cell = tf.nn.rnn_cell.DropoutWrapper(
-          lstm_cell, output_keep_prob=config.keep_prob)
-    cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * config.num_layers, state_is_tuple=True)
+      def attn_cell():
+        return tf.contrib.rnn.DropoutWrapper(
+            lstm_cell(), output_keep_prob=config.keep_prob)
+    cell = tf.contrib.rnn.MultiRNNCell(
+        [attn_cell() for _ in range(config.num_layers)], state_is_tuple=True)
 
     self._initial_state = cell.zero_state(batch_size, tf.float32)
     self._input_data = tf.placeholder(tf.int32,[config.batch_size,config.num_steps])
@@ -144,18 +156,18 @@ class MediumConfig(object):
   learning_rate = 1.0
   max_grad_norm = 5
   num_layers = 2
-  num_steps = 3
+  num_steps = 35
   hidden_size = 650
   max_epoch = 6
-  max_max_epoch = 10
+  max_max_epoch = 2
   keep_prob = 0.5
   lr_decay = 0.8
-  batch_size = 3
+  batch_size = 20
   vocab_size = 10000
 
 
 
-def run_epoch(session, model, data, eval_op=None, corrupt=False):
+def run_epoch(session, model, data, eval_op=None):
   """Runs the model on the given data."""
   start_time = time.time()
   costs = 0.0
@@ -168,11 +180,15 @@ def run_epoch(session, model, data, eval_op=None, corrupt=False):
   }
   if eval_op is not None:
     fetches["eval_op"] = eval_op
-  print(model.input.epoch_size)
+  
   for step in range(model.input.epoch_size):
 
 
     feed_dict = {model.input_data: data[0][step], model.targets: data[1][step]}
+
+    for i, (c, h) in enumerate(model.initial_state):
+      feed_dict[c] = state[i].c
+      feed_dict[h] = state[i].h
 
     vals = session.run(fetches, feed_dict)
     cost = vals["cost"]
@@ -181,7 +197,7 @@ def run_epoch(session, model, data, eval_op=None, corrupt=False):
     costs += cost
     iters += model.input.num_steps
 
-    if step % (model.input.epoch_size // 1000) == 10:
+    if step % (model.input.epoch_size // 10) == 10:
       print("%.3f perplexity: %.3f speed: %.0f wps" %
             (step * 1.0 / model.input.epoch_size, np.exp(costs / iters),
              iters * model.input.batch_size / (time.time() - start_time)))
@@ -197,6 +213,7 @@ def main(_):
 
   raw_data = reader.ptb_raw_data()
   true_data, false_data, _ = raw_data
+  #true_data, _ = raw_data
 
 
   config = get_config()
@@ -219,8 +236,10 @@ def main(_):
 
 
 
-    sv = tf.train.Supervisor(logdir=os.getcwd()+"traindir/")
+    sv = tf.train.Supervisor(logdir="home/supersteve/git/nlpchallege/traindir")
+    #sv = tf.train.Supervisor()
     with sv.managed_session() as session:
+      sv.saver.restore(session, tf.train.latest_checkpoint("home/supersteve/git/nlpchallege/traindir"))
       for i in range(config.max_max_epoch):
         lr_decay = config.lr_decay ** max(i - config.max_epoch, 0.0)
         truem.assign_lr(session, config.learning_rate * lr_decay)
@@ -232,7 +251,9 @@ def main(_):
 
         print("true"+str(train_perplexity))
         print("false"+str(false_train_perplexity))
-      sv.saver.save(session, os.getcwd()+"traindir/")
+        sv.saver.save(session,"home/supersteve/git/nlpchallege/traindir")
+        print("saved")
+      #sv.saver.save(session,"home/supersteve/git/nlpchallege/traindir")
 
 if __name__ == "__main__":
   tf.app.run()
